@@ -411,7 +411,7 @@ export default function App() {
     return () => { unsubQ(); unsubS(); };
   }, []);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadData() {
     setLoading(true);
