@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, onSnapshot, collection } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection } from "firebase/firestore";
 
 // ============================================================
 // FIREBASE
@@ -19,7 +19,7 @@ const db = getFirestore(firebaseApp);
 // ============================================================
 // API KEYS
 // ============================================================
-const APIFOOTBALL_KEY = "a3b3cd05913011be66e7cc3936222472";
+// (No API key needed — ESPN's public scoreboard endpoint is used)
 
 // ============================================================
 // TEAM VALUES (Poisson difficulty)
@@ -411,71 +411,85 @@ export default function App() {
     return () => { unsubQ(); unsubS(); };
   }, []);
 
-  useEffect(() => { loadData(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoading(true);
     await fetchResults();
-    await fetchPlayerStats();
     setLastUpdated(new Date());
     setLoading(false);
   }
 
   async function fetchResults() {
     try {
-      const res = await fetch("https://v3.football.api-sports.io/fixtures?league=1&season=2026", {
-        headers: { "x-apisports-key": APIFOOTBALL_KEY }
-      });
-      if(!res.ok) throw new Error(res.status);
-      const data = await res.json();
+      const dates = getTournamentDatesSoFar();
       const mapped = {...KNOWN_RESULTS};
-      for(const f of (data.response||[])) {
-        if(f.fixture?.status?.short !== "FT") continue;
-        const key = findMatchKey(f.teams?.home?.name, f.teams?.away?.name);
-        const h = f.goals?.home; const a = f.goals?.away;
-        if(key && h!==null && a!==null) mapped[key] = [h,a];
-      }
-      setResults(mapped);
-      setApiStatus("live");
-    } catch { setApiStatus("fallback"); }
-  }
-
-  async function fetchPlayerStats() {
-    try {
-      const res = await fetch("https://v3.football.api-sports.io/fixtures?league=1&season=2026&status=FT", {
-        headers:{"x-apisports-key":APIFOOTBALL_KEY}
-      });
-      if(!res.ok) return;
-      const data = await res.json();
       const stats = {};
-      for(const fix of (data.response||[]).slice(0,30)) {
-        const fid = fix.fixture?.id;
-        const matchKey = findMatchKey(fix.teams?.home?.name, fix.teams?.away?.name);
-        if(!fid||!matchKey) continue;
+
+      for(const dateStr of dates) {
         try {
-          const pr = await fetch(`https://v3.football.api-sports.io/fixtures/players?fixture=${fid}`, {
-            headers:{"x-apisports-key":APIFOOTBALL_KEY}
-          });
-          if(!pr.ok) continue;
-          const pd = await pr.json();
-          for(const team of (pd.response||[])) {
-            for(const po of (team.players||[])) {
-              const pName = po.player?.name;
-              const s = po.statistics?.[0];
-              if(!pName||!s) continue;
-              stats[`${norm(pName)}_${matchKey}`] = {
-                name:pName, matchKey,
-                goals:s.goals?.total||0, assists:s.goals?.assists||0,
-                yellowCards:s.cards?.yellow||0, redCards:s.cards?.red||0,
-                penaltySaved:s.penalty?.saved||0, penaltyMissed:s.penalty?.missed||0,
-                ownGoals:s.goals?.owngoals||0, minutesPlayed:s.games?.minutes||0,
-              };
+          const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${dateStr}`);
+          if(!res.ok) continue;
+          const data = await res.json();
+
+          for(const ev of (data.events||[])) {
+            const comp = ev.competitions?.[0];
+            if(!comp) continue;
+            const statusOk = comp.status?.type?.completed;
+            const home = comp.competitors?.find(c=>c.homeAway==="home");
+            const away = comp.competitors?.find(c=>c.homeAway==="away");
+            if(!home||!away) continue;
+
+            const key = findMatchKey(home.team?.displayName, away.team?.displayName);
+            if(!key) continue;
+
+            if(statusOk) {
+              const h = parseInt(home.score); const a = parseInt(away.score);
+              if(!isNaN(h)&&!isNaN(a)) mapped[key] = [h,a];
+
+              // Parse events for player stats (goals, cards)
+              for(const detail of (comp.details||[])) {
+                const athlete = detail.athletesInvolved?.[0];
+                if(!athlete) continue;
+                const teamId = detail.team?.id;
+                const isHomeTeam = teamId === home.team?.id;
+                const playerKey = `${norm(athlete.displayName)}_${key}`;
+
+                if(!stats[playerKey]) {
+                  stats[playerKey] = {
+                    name: athlete.displayName, matchKey:key,
+                    goals:0, assists:0, yellowCards:0, redCards:0,
+                    penaltySaved:0, penaltyMissed:0, ownGoals:0, minutesPlayed:90,
+                  };
+                }
+                if(detail.scoringPlay && !detail.ownGoal) stats[playerKey].goals += 1;
+                if(detail.ownGoal) stats[playerKey].ownGoals += 1;
+                if(detail.yellowCard) stats[playerKey].yellowCards += 1;
+                if(detail.redCard) stats[playerKey].redCards += 1;
+                // Nota: ESPN no da asistencias por jugador en el feed de eventos,
+                // solo el total del equipo. Penales atajados/fallados tampoco
+                // vienen diferenciados — quedan en 0 hasta encontrar mejor fuente.
+              }
             }
           }
         } catch {}
       }
+      setResults(mapped);
       setPlayerStats(stats);
-    } catch {}
+      setApiStatus("live");
+    } catch { setApiStatus("fallback"); }
+  }
+
+  function getTournamentDatesSoFar() {
+    const start = new Date("2026-06-11T00:00:00");
+    const today = new Date();
+    const dates = [];
+    let d = new Date(start);
+    while(d <= today) {
+      dates.push(`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`);
+      d.setDate(d.getDate()+1);
+    }
+    return dates;
   }
 
   // ---- Save quiniela to Firebase ----
