@@ -554,8 +554,8 @@ export default function App() {
         const isAway = player.country===match.away;
         if(!isHome&&!isAway) continue;
         const statKey = Object.keys(playerStats).find(k=>{
-          const [pn,mk]=k.split("_");
-          if(mk!==match.key)return false;
+          if(!k.endsWith(`_${match.key}`)) return false;
+          const pn = k.slice(0, -(match.key.length+1)); // strip "_matchKey" suffix
           const last=norm(player.name.split(" ").slice(-1)[0]);
           return pn.includes(last)||last.includes(pn.slice(0,5));
         });
