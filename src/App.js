@@ -425,6 +425,7 @@ export default function App() {
       const dates = getTournamentDatesSoFar();
       const mapped = {...KNOWN_RESULTS};
       const stats = {};
+      const finishedEventIds = []; // {eventId, matchKey}
 
       for(const dateStr of dates) {
         try {
@@ -446,34 +447,52 @@ export default function App() {
             if(statusOk) {
               const h = parseInt(home.score); const a = parseInt(away.score);
               if(!isNaN(h)&&!isNaN(a)) mapped[key] = [h,a];
-
-              // Parse events for player stats (goals, cards)
-              for(const detail of (comp.details||[])) {
-                const athlete = detail.athletesInvolved?.[0];
-                if(!athlete) continue;
-                const teamId = detail.team?.id;
-                const isHomeTeam = teamId === home.team?.id;
-                const playerKey = `${norm(athlete.displayName)}_${key}`;
-
-                if(!stats[playerKey]) {
-                  stats[playerKey] = {
-                    name: athlete.displayName, matchKey:key,
-                    goals:0, assists:0, yellowCards:0, redCards:0,
-                    penaltySaved:0, penaltyMissed:0, ownGoals:0, minutesPlayed:90,
-                  };
-                }
-                if(detail.scoringPlay && !detail.ownGoal) stats[playerKey].goals += 1;
-                if(detail.ownGoal) stats[playerKey].ownGoals += 1;
-                if(detail.yellowCard) stats[playerKey].yellowCards += 1;
-                if(detail.redCard) stats[playerKey].redCards += 1;
-                // Nota: ESPN no da asistencias por jugador en el feed de eventos,
-                // solo el total del equipo. Penales atajados/fallados tampoco
-                // vienen diferenciados — quedan en 0 hasta encontrar mejor fuente.
-              }
+              finishedEventIds.push({eventId: ev.id, matchKey: key});
             }
           }
         } catch {}
       }
+
+      // Second pass: pull the per-match summary (rosters[].roster[].stats[])
+      // for accurate per-player goals, assists, cards, own goals, saves.
+      for(const {eventId, matchKey} of finishedEventIds) {
+        try {
+          const sumRes = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${eventId}`);
+          if(!sumRes.ok) continue;
+          const sumData = await sumRes.json();
+          const rosters = sumData.rosters || [];
+
+          for(const rosterBlock of rosters) {
+            for(const player of (rosterBlock.roster || [])) {
+              const name = player.athlete?.displayName;
+              if(!name) continue;
+              const statMap = {};
+              for(const s of (player.stats || [])) statMap[s.name] = s.value;
+
+              const goals = statMap.totalGoals || 0;
+              const assists = statMap.goalAssists || 0;
+              const yellow = statMap.yellowCards || 0;
+              const red = statMap.redCards || 0;
+              const ownGoals = statMap.ownGoals || 0;
+              const saves = statMap.saves || 0;
+              const conceded = statMap.goalsConceded;
+
+              // Skip players with no relevant contribution to keep payload small
+              if(!goals && !assists && !yellow && !red && !ownGoals) continue;
+
+              const playerKey = `${norm(name)}_${matchKey}`;
+              stats[playerKey] = {
+                name, matchKey,
+                goals, assists, yellowCards: yellow, redCards: red,
+                penaltySaved: 0, penaltyMissed: 0, ownGoals,
+                minutesPlayed: player.subbedOut || player.subbedIn ? 60 : 90,
+                saves, conceded,
+              };
+            }
+          }
+        } catch {}
+      }
+
       setResults(mapped);
       setPlayerStats(stats);
       setApiStatus("live");
