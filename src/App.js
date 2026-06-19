@@ -71,11 +71,16 @@ function getResult(h,a){ if(h===null||a===null||h===undefined||a===undefined)ret
 
 function getQuinielaPoints(homeVal,awayVal,actualResult,predResult,ah,aa,ph,pa){
   if(!actualResult||actualResult!==predResult)return 0;
-  const ratio=homeVal/(homeVal+awayVal);
+  // Underdog = winner's squad value is less than half of loser's value
   let base=0;
-  if(actualResult==="home")base=ratio>0.55?1:ratio<0.45?5:3;
-  else if(actualResult==="draw")base=3;
-  else base=ratio<0.45?1:ratio>0.55?5:3;
+  if(actualResult==="draw") {
+    base=3;
+  } else {
+    const winnerVal = actualResult==="home" ? homeVal : awayVal;
+    const loserVal  = actualResult==="home" ? awayVal : homeVal;
+    const isUnderdog = winnerVal < loserVal / 2;
+    base = isUnderdog ? 5 : 1;
+  }
   return base+(ah===ph&&aa===pa?3:0);
 }
 
@@ -567,8 +572,17 @@ export default function App() {
         const statKey = Object.keys(playerStats).find(k=>{
           if(!k.endsWith(`_${match.key}`)) return false;
           const pn = k.slice(0, -(match.key.length+1));
-          const last = norm(player.name.split(" ").slice(-1)[0]);
-          return pn.includes(last)||last.includes(pn.slice(0,5));
+          // Use last two words of player name for more precise matching
+          const nameParts = player.name.split(" ");
+          const last = norm(nameParts.slice(-1)[0]);
+          const secondLast = nameParts.length>1 ? norm(nameParts.slice(-2)[0]) : "";
+          // Must match last name AND either first name or second last name
+          if(!pn.includes(last)) return false;
+          if(last.length<=3) {
+            // Short last names (like "Aké"→"ake") require additional confirmation
+            return secondLast && pn.includes(secondLast);
+          }
+          return true;
         });
         const ps = statKey?playerStats[statKey]:null;
 
