@@ -586,18 +586,12 @@ export default function App() {
         });
         const ps = statKey?playerStats[statKey]:null;
 
-        // 60-minute rule: player must have played 60+ min for clean sheet
-        const minutesPlayed = ps?.minutesPlayed ?? 90;
-        const conceded = isHome?aa:ah;
-        const cleanSheet = conceded===0 && minutesPlayed>=60;
-
         let pts=0;
         if(ps) {
-          // Only count points if player has relevant stats (played)
+          const minutesPlayed = ps.minutesPlayed ?? 90;
+          const conceded = isHome?aa:ah;
+          const cleanSheet = conceded===0 && minutesPlayed>=60;
           pts = posPoints(player.pos, ps.goals, ps.assists, cleanSheet, ps.yellowCards, ps.redCards, ps.penaltySaved, ps.penaltyMissed, ps.ownGoals);
-        } else if(cleanSheet&&(player.pos==="POR"||player.pos==="DEF")) {
-          // Fallback clean sheet if no stats but result shows 0 conceded
-          pts = FP.cleanSheet;
         }
 
         const isCaptain = captain===player.name;
